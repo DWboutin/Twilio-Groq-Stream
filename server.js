@@ -3,6 +3,7 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const dotenv = require("dotenv");
+const Groq = require("groq-sdk");
 dotenv.config();
 
 // Twilio
@@ -12,7 +13,7 @@ const dispatcher = new HttpDispatcher();
 const wsserver = http.createServer(handleRequest); // Create HTTP server to handle requests
 
 const HTTP_SERVER_PORT = 8080; // Define the server port
-let streamSid = ''; // Variable to store stream session ID
+let streamSid = ""; // Variable to store stream session ID
 
 const mediaws = new WebSocketServer({
   httpServer: wsserver,
@@ -25,12 +26,16 @@ const deepgramClient = createClient(process.env.DEEPGRAM_API_KEY);
 let keepAlive;
 
 // OpenAI
-const OpenAI = require('openai');
+const OpenAI = require("openai");
 const openai = new OpenAI();
 
+// Groq
+const groq = new Groq();
+
 // Deepgram Text to Speech Websocket
-const WebSocket = require('ws');
-const deepgramTTSWebsocketURL = 'wss://api.beta.deepgram.com/v1/speak?encoding=mulaw&sample_rate=8000&container=none';
+const WebSocket = require("ws");
+const deepgramTTSWebsocketURL =
+  "wss://api.beta.deepgram.com/v1/speak?encoding=mulaw&sample_rate=8000&container=none";
 
 // Performance Timings
 let llmStart = 0;
@@ -38,7 +43,7 @@ let ttsStart = 0;
 let firstByte = true;
 let speaking = false;
 let send_first_sentence_input_time = null;
-const chars_to_check = [".", ",", "!", "?", ";", ":"]
+const chars_to_check = [".", ",", "!", "?", ";", ":"];
 
 // Function to handle HTTP requests
 function handleRequest(request, response) {
@@ -53,9 +58,9 @@ function handleRequest(request, response) {
  Easy Debug Endpoint
 */
 dispatcher.onGet("/", function (req, res) {
-  console.log('GET /');
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Hello, World!');
+  console.log("GET /");
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Hello, World!");
 });
 
 /*
@@ -115,18 +120,18 @@ class MediaStream {
           this.hasSeenMedia = true;
         }
         if (!streamSid) {
-          console.log('twilio: streamSid=', streamSid);
+          console.log("twilio: streamSid=", streamSid);
           streamSid = data.streamSid;
         }
         if (data.media.track == "inbound") {
-          let rawAudio = Buffer.from(data.media.payload, 'base64');
+          let rawAudio = Buffer.from(data.media.payload, "base64");
           this.deepgram.send(rawAudio);
         }
       }
       if (data.event === "mark") {
         console.log("twilio: Mark event received", data);
       }
-      if (data.event === "close") {
+      if (data.event === "stop") {
         console.log("twilio: Close event received: ", data);
         this.close();
       }
@@ -144,19 +149,19 @@ class MediaStream {
 /*
   OpenAI Streaming LLM
 */
-async function promptLLM(mediaStream, prompt) {
+async function openAiPromptLLM(mediaStream, prompt) {
   const stream = openai.beta.chat.completions.stream({
-    model: 'gpt-3.5-turbo',
+    model: "gpt-3.5-turbo",
     stream: true,
     messages: [
       {
-        role: 'assistant',
-        content: `You are funny, everything is a joke to you.`
+        role: "assistant",
+        content: `You are funny, everything is a joke to you.`,
       },
       {
-        role: 'user',
-        content: prompt
-      }
+        role: "user",
+        content: prompt,
+      },
     ],
   });
 
@@ -168,30 +173,87 @@ async function promptLLM(mediaStream, prompt) {
         const end = Date.now();
         const duration = end - llmStart;
         ttsStart = Date.now();
-        console.warn('\n>>> openai LLM: Time to First Token = ', duration, '\n');
+        console.warn("\n>>> openai LLM: Time to First Token = ", duration, "\n");
         firstToken = false;
         firstByte = true;
       }
       chunk_message = chunk.choices[0].delta.content;
       if (chunk_message) {
-        process.stdout.write(chunk_message)
-        if (!send_first_sentence_input_time && containsAnyChars(chunk_message)){
+        process.stdout.write(chunk_message);
+        if (!send_first_sentence_input_time && containsAnyChars(chunk_message)) {
           send_first_sentence_input_time = Date.now();
         }
-        mediaStream.deepgramTTSWebsocket.send(JSON.stringify({ 'type': 'Speak', 'text': chunk_message }));
+        mediaStream.deepgramTTSWebsocket.send(
+          JSON.stringify({ type: "Speak", text: chunk_message })
+        );
       }
     }
   }
   // Tell TTS Websocket were finished generation of tokens
-  mediaStream.deepgramTTSWebsocket.send(JSON.stringify({ 'type': 'Flush' }));
+  mediaStream.deepgramTTSWebsocket.send(JSON.stringify({ type: "Flush" }));
+}
+
+/*
+  Groq Streaming LLM
+*/
+async function groqPromptLLM(mediaStream, prompt) {
+  const stream = await groq.chat.completions.create({
+    messages: [
+      {
+        role: "system",
+        content: `You can\'t mention that you are a robot.`,
+      },
+      {
+        role: "assistant",
+        content: `You are funny, everything is a joke to you.`,
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+    model: "llama3-8b-8192",
+    temperature: 0.5,
+    max_tokens: 1024,
+    top_p: 1,
+    stop: ", 6",
+    stream: true,
+  });
+
+  speaking = true;
+  let firstToken = true;
+  for await (const chunk of stream) {
+    if (speaking) {
+      if (firstToken) {
+        const end = Date.now();
+        const duration = end - llmStart;
+        ttsStart = Date.now();
+        console.warn("\n>>> groq LLM: Time to First Token = ", duration, "\n");
+        firstToken = false;
+        firstByte = true;
+      }
+      chunk_message = chunk.choices[0].delta.content;
+      if (chunk_message) {
+        process.stdout.write(chunk_message);
+        if (!send_first_sentence_input_time && containsAnyChars(chunk_message)) {
+          send_first_sentence_input_time = Date.now();
+        }
+        mediaStream.deepgramTTSWebsocket.send(
+          JSON.stringify({ type: "Speak", text: chunk_message })
+        );
+      }
+    }
+  }
+  // Tell TTS Websocket were finished generation of tokens
+  mediaStream.deepgramTTSWebsocket.send(JSON.stringify({ type: "Flush" }));
 }
 
 function containsAnyChars(str) {
   // Convert the string to an array of characters
   let strArray = Array.from(str);
-  
+
   // Check if any character in strArray exists in chars_to_check
-  return strArray.some(char => chars_to_check.includes(char));
+  return strArray.some((char) => chars_to_check.includes(char));
 }
 
 /*
@@ -200,21 +262,21 @@ function containsAnyChars(str) {
 const setupDeepgramWebsocket = (mediaStream) => {
   const options = {
     headers: {
-      Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`
-    }
+      Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
+    },
   };
   const ws = new WebSocket(deepgramTTSWebsocketURL, options);
 
-  ws.on('open', function open() {
-    console.log('deepgram TTS: Connected');
+  ws.on("open", function open() {
+    console.log("deepgram TTS: Connected");
   });
 
-  ws.on('message', function incoming(data) {
+  ws.on("message", function incoming(data) {
     // Handles barge in
     if (speaking) {
       try {
         let json = JSON.parse(data.toString());
-        console.log('deepgram TTS: ', data.toString());
+        console.log("deepgram TTS: ", data.toString());
         return;
       } catch (e) {
         // Ignore
@@ -222,15 +284,18 @@ const setupDeepgramWebsocket = (mediaStream) => {
       if (firstByte) {
         const end = Date.now();
         const duration = end - ttsStart;
-        console.warn('\n\n>>> deepgram TTS: Time to First Byte = ', duration, '\n');
+        console.warn("\n\n>>> deepgram TTS: Time to First Byte = ", duration, "\n");
         firstByte = false;
-        if (send_first_sentence_input_time){
-          console.log(`>>> deepgram TTS: Time to First Byte from end of sentence token = `, (end - send_first_sentence_input_time));
+        if (send_first_sentence_input_time) {
+          console.log(
+            `>>> deepgram TTS: Time to First Byte from end of sentence token = `,
+            end - send_first_sentence_input_time
+          );
         }
       }
-      const payload = data.toString('base64');
+      const payload = data.toString("base64");
       const message = {
-        event: 'media',
+        event: "media",
         streamSid: streamSid,
         media: {
           payload,
@@ -243,16 +308,16 @@ const setupDeepgramWebsocket = (mediaStream) => {
     }
   });
 
-  ws.on('close', function close() {
-    console.log('deepgram TTS: Disconnected from the WebSocket server');
+  ws.on("close", function close() {
+    console.log("deepgram TTS: Disconnected from the WebSocket server");
   });
 
-  ws.on('error', function error(error) {
+  ws.on("error", function error(error) {
     console.log("deepgram TTS: error received");
     console.error(error);
   });
   return ws;
-}
+};
 
 /*
   Deepgram Streaming Speech to Text
@@ -274,7 +339,7 @@ const setupDeepgram = (mediaStream) => {
     no_delay: true,
     interim_results: true,
     endpointing: 300,
-    utterance_end_ms: 1000
+    utterance_end_ms: 1000,
   });
 
   if (keepAlive) clearInterval(keepAlive);
@@ -295,21 +360,21 @@ const setupDeepgram = (mediaStream) => {
             is_finals = [];
             console.log(`deepgram STT: [Speech Final] ${utterance}`);
             llmStart = Date.now();
-            promptLLM(mediaStream, utterance); // Send the final transcript to OpenAI for response
+            groqPromptLLM(mediaStream, utterance); // Send the final transcript to OpenAI for response
           } else {
             console.log(`deepgram STT:  [Is Final] ${transcript}`);
           }
         } else {
           console.log(`deepgram STT:    [Interim Result] ${transcript}`);
           if (speaking) {
-            console.log('twilio: clear audio playback', streamSid);
+            console.log("twilio: clear audio playback", streamSid);
             // Handles Barge In
             const messageJSON = JSON.stringify({
-              "event": "clear",
-              "streamSid": streamSid,
+              event: "clear",
+              streamSid: streamSid,
             });
             mediaStream.connection.sendUTF(messageJSON);
-            mediaStream.deepgramTTSWebsocket.send(JSON.stringify({ 'type': 'Reset' }));
+            mediaStream.deepgramTTSWebsocket.send(JSON.stringify({ type: "Reset" }));
             speaking = false;
           }
         }
@@ -323,7 +388,7 @@ const setupDeepgram = (mediaStream) => {
         is_finals = [];
         console.log(`deepgram STT: [Speech Final] ${utterance}`);
         llmStart = Date.now();
-        promptLLM(mediaStream, utterance);
+        groqPromptLLM(mediaStream, utterance);
       }
     });
 
