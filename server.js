@@ -131,7 +131,7 @@ class MediaStream {
       if (data.event === "mark") {
         console.log("twilio: Mark event received", data);
       }
-      if (data.event === "stop") {
+      if (data.event === "close") {
         console.log("twilio: Close event received: ", data);
         this.close();
       }
