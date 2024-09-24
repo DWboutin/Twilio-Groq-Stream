@@ -4,10 +4,10 @@ const http = require("http");
 const path = require("path");
 const dotenv = require("dotenv");
 const Groq = require("groq-sdk");
-const assistantJson = require("./assistant.json");
+const assistant = require("./assistant.json");
 dotenv.config();
 
-const assistant = JSON.parse(assistantJson);
+console.log(assistant);
 
 // Twilio
 const HttpDispatcher = require("httpdispatcher");
