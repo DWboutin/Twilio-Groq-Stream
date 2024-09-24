@@ -4,7 +4,10 @@ const http = require("http");
 const path = require("path");
 const dotenv = require("dotenv");
 const Groq = require("groq-sdk");
+const assistantJson = require("./assistant.json");
 dotenv.config();
+
+const assistant = JSON.parse(assistantJson);
 
 // Twilio
 const HttpDispatcher = require("httpdispatcher");
@@ -154,10 +157,7 @@ async function openAiPromptLLM(mediaStream, prompt) {
     model: "gpt-3.5-turbo",
     stream: true,
     messages: [
-      {
-        role: "assistant",
-        content: `You are funny, everything is a joke to you.`,
-      },
+      ...assistant,
       {
         role: "user",
         content: prompt,
@@ -199,14 +199,7 @@ async function openAiPromptLLM(mediaStream, prompt) {
 async function groqPromptLLM(mediaStream, prompt) {
   const stream = await groq.chat.completions.create({
     messages: [
-      {
-        role: "system",
-        content: `You can\'t mention that you are a robot.`,
-      },
-      {
-        role: "assistant",
-        content: `You are funny, everything is a joke to you.`,
-      },
+      ...assistant,
       {
         role: "user",
         content: prompt,
