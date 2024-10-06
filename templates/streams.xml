@@ -2,7 +2,7 @@
 <Response>
   <Say>Speak now.</Say>
   <Connect>
-    <Stream url="wss://twilio-groq-stream.onrender.com/streams">
+    <Stream url="wss://3d85-2605-59c8-23de-af10-a4f5-45ab-a981-5f5c.ngrok-free.app/streams">
       <Parameter name="aCustomParameter" value="aCustomValue that was set in TwiML" />
     </Stream>
   </Connect>
